@@ -493,7 +493,7 @@ def check_low_volume_failures(cursor, time_window):
             WHERE mid_id = %s
               AND bank_name = %s
               AND message LIKE %s
-              AND alert_time >= NOW() - INTERVAL '30 minutes'
+              AND alert_time >= NOW() - INTERVAL '1440 minutes'
         """, (mid_id, bank_name, f"%Low Volume Complete Failure%"))
 
         cooldown_check = cursor.fetchone()

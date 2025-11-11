@@ -21,12 +21,16 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv('/opt/payment-webhook/.env')
 
+# Create logs directory if it doesn't exist
+log_dir = './logs'
+os.makedirs(log_dir, exist_ok=True)
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('/var/log/webhook_receiver.log'),
+        logging.FileHandler('./logs/webhook_receiver.log'),
         logging.StreamHandler()
     ]
 )
