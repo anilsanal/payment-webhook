@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Environment variables and secrets
+.env
+*.env
+.env.local
+.env.*.local
+
+# Database
+*.db
+*.sqlite
+*.sql.backup
+*.sql~
+
+# Logs
+*.log
+logs/
+/var/log/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backups and temporary files
+*.backup
+*.backup_*
+*_backup_*
+*.bak
+*.tmp
+*.tar.gz
+*.zip
+
+# CSV data files (may contain sensitive data)
+*.csv
+!BINS_and_BANKS_List.csv
+
+# Documentation (keep markdown files)
+# None - we want to keep .md files
+
+# Archive
+grafana-archive/

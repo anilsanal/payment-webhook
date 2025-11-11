@@ -1,0 +1,270 @@
+# Payment Routing Configuration Dashboard Guide
+
+## Overview
+
+The **Payment Routing Configuration Dashboard** provides real-time visibility into your payment routing setup across all merchants. It displays recon_id configurations and their associated MIDs (terminal IDs) based on actual transaction data.
+
+## Dashboard Access
+
+**URL:** `https://analytics.polpay.pro/d/routing-configuration`
+
+**Direct Access:**
+- From Grafana homepage, navigate to "Dashboards" → "Payment Routing Configuration"
+- The dashboard is under the "Payment Monitoring" folder
+
+## Dashboard Structure
+
+### Understanding Recon_ID Format
+
+The recon_id follows this naming convention:
+```
+{MERCHANT}_{CURRENCY}_{CARD_TYPE}_{BANK}
+```
+
+**Examples:**
+- `MLT_EUR_MC_ALL` - Multipay, Euro, Mastercard, All Banks
+- `MLT_EUR_VISA_AKBANK` - Multipay, Euro, Visa, Akbank
+- `MLT_TRY_VISA_AKBANK` - Multipay MC TRY, Turkish Lira, Visa, Akbank
+- `TOM Bank` - Legacy format (simple bank name)
+
+### Hierarchy
+
+```
+Merchant Name
+ └─ Recon ID (VISA/MC + Bank combination)
+     └─ MID (Terminal ID)
+         └─ Transaction data
+```
+
+## Dashboard Panels
+
+### 1. Overview Panel
+Provides context and explanation of the dashboard structure.
+
+### 2. Multipay [LIVE] Panel
+**Displays:**
+- All recon_id configurations for Multipay [LIVE]
+- MIDs assigned under each recon_id
+- Transaction count per recon_id/MID combination
+- Success/Declined breakdown
+- Success rate percentage (color-coded)
+- Last transaction timestamp
+
+**Current Status:**
+- ✅ Fully configured with 13 unique recon_ids
+- Includes: Akbank, MLT_EUR_MC_ALL, MLT_EUR_VISA_ISBANK, etc.
+
+### 3. Multipay MC TRY [LIVE] Panel
+**Displays:** Same structure as Multipay [LIVE]
+
+**Current Status:**
+- ⚠️ Limited data (only 2 recon_ids: Akbank, TOM Bank)
+- Expected to expand with new recon_ids in format: `MLT_TRY_{CARD}_{BANK}`
+
+### 4. Paytic [LIVE] Panel
+**Displays:** Same structure as other merchant panels
+
+**Current Status:**
+- ⚠️ Only TOM Bank recon_id currently
+- Expected to expand with new recon_ids
+
+### 5. Paytic MC TRY [LIVE] Panel
+**Displays:** Same structure as other merchant panels
+
+**Current Status:**
+- ⚠️ No recon_id data yet
+- Has 89,816 transactions total but recon_id not yet populated
+- Will show data once recon_id implementation is active
+
+### 6. Overall Routing Statistics Panel
+**Displays:**
+- Summary across all 4 merchants
+- Unique recon_id and MID counts
+- Total transaction counts
+- Success rates by merchant
+
+## Column Descriptions
+
+| Column | Description |
+|--------|-------------|
+| **Recon ID** | Routing configuration identifier (MERCHANT_CURRENCY_CARDTYPE_BANK) |
+| **MID** | Terminal/Merchant ID assigned to this routing setup |
+| **Transaction Count** | Number of transactions in last 24 hours |
+| **Success** | Number of successful transactions |
+| **Declined** | Number of declined transactions |
+| **Success Rate %** | Percentage of successful transactions (color-coded) |
+| **Last Transaction** | Timestamp of most recent transaction |
+
+## Success Rate Color Coding
+
+The "Success Rate %" column uses color backgrounds to quickly identify performance:
+
+| Rate | Color | Status |
+|------|-------|--------|
+| 0-49% | 🔴 Red | Critical - Poor performance |
+| 50-69% | 🟠 Orange | Warning - Below average |
+| 70-84% | 🟡 Yellow | Acceptable - Room for improvement |
+| 85-100% | 🟢 Green | Good - Healthy performance |
+
+## Time Range & Refresh
+
+- **Default Time Range:** Last 24 hours
+- **Auto-Refresh:** Every 5 minutes
+- **Adjustable:** Use Grafana time picker to adjust range
+
+## Use Cases
+
+### 1. Monitor Routing Configuration
+- See all active recon_ids per merchant
+- Verify which MIDs are assigned to each routing setup
+- Identify routing configurations with transaction activity
+
+### 2. Performance Analysis
+- Compare success rates across different routing setups
+- Identify problematic recon_id/MID combinations
+- Track last transaction time to find inactive routes
+
+### 3. Configuration Validation
+- Verify new recon_ids appear after implementation
+- Confirm MIDs are correctly assigned
+- Validate routing is distributing traffic as expected
+
+### 4. Troubleshooting
+- Identify routes with 0% success rate (e.g., MLT_EUR_MC_VAKIFBANK)
+- Find MIDs with consistently low success rates
+- Detect routing configurations that haven't received traffic recently
+
+## Current Data Insights (Last 24 Hours)
+
+### Multipay [LIVE]
+- **Recon IDs:** 13 unique configurations
+- **MIDs:** 6 unique terminals
+- **Transactions:** 534
+- **Success Rate:** 61.80%
+
+**Notable Issues:**
+- ⚠️ MLT_EUR_MC_VAKIFBANK: 0% success rate (38 transactions, all declined)
+- ⚠️ MLT_EUR_MC_GARANTI: 25% success rate (4 transactions)
+
+### Multipay MC TRY [LIVE]
+- **Recon IDs:** 1 (TOM Bank)
+- **MIDs:** 1 terminal
+- **Transactions:** 40
+- **Success Rate:** 70.00%
+
+### Paytic [LIVE]
+- **Recon IDs:** 1 (TOM Bank)
+- **MIDs:** 3 terminals
+- **Transactions:** 325
+- **Success Rate:** 68.62%
+
+### Paytic MC TRY [LIVE]
+- **Status:** No recon_id data yet (waiting for implementation)
+- **Total Transactions:** 89,816 (without recon_id)
+
+## Expected Evolution
+
+As you implement recon_id for other merchants, you should see:
+
+### Multipay MC TRY [LIVE]
+Expected formats:
+- `MLT_TRY_VISA_AKBANK`
+- `MLT_TRY_MC_ISBANK`
+- `MLT_TRY_VISA_GARANTI`
+- etc.
+
+### Paytic [LIVE]
+Expected formats:
+- `PTC_EUR_VISA_AKBANK`
+- `PTC_EUR_MC_ISBANK`
+- etc.
+
+### Paytic MC TRY [LIVE]
+Expected formats:
+- `PTC_TRY_VISA_AKBANK`
+- `PTC_TRY_MC_TOMBANK`
+- etc.
+
+## Maintenance
+
+### Updating the Dashboard
+
+If you need to modify the dashboard:
+
+1. **Via Grafana UI:**
+   - Navigate to the dashboard
+   - Click "Settings" (gear icon)
+   - Make changes
+   - Click "Save dashboard"
+
+2. **Via Script (Recommended for major changes):**
+   ```bash
+   cd /opt/payment-webhook
+   nano create_routing_dashboard.py  # Edit the script
+   python3 create_routing_dashboard.py  # Regenerate
+   chown grafana:grafana /var/lib/grafana/dashboards/routing_configuration.json
+   systemctl restart grafana-server
+   ```
+
+### Troubleshooting
+
+**Dashboard not appearing:**
+```bash
+# Check dashboard file exists and has correct permissions
+ls -l /var/lib/grafana/dashboards/routing_configuration.json
+chown grafana:grafana /var/lib/grafana/dashboards/routing_configuration.json
+
+# Check Grafana logs
+journalctl -u grafana-server -n 50
+```
+
+**No data showing:**
+```bash
+# Verify transactions have recon_id
+PGPASSWORD='yingyanganil5s' psql -U webhook_user -h localhost -d payment_transactions \
+  -c "SELECT COUNT(*) FROM transactions WHERE recon_id IS NOT NULL;"
+
+# Check PostgreSQL datasource in Grafana
+curl -u admin:admin http://localhost:3001/api/datasources
+```
+
+**Queries timing out:**
+- Adjust time range to smaller window (e.g., last 6 hours)
+- Check database performance
+- Verify indexes exist on recon_id and mid_id columns
+
+## Queries Used
+
+The dashboard uses optimized PostgreSQL queries with indexes on:
+- `idx_t_recon_id` on transactions(recon_id)
+- `idx_t_mid_id` on transactions(mid_id)
+- `idx_trans_datetime` on transactions(trans_datetime)
+
+This ensures fast query performance even with large transaction volumes.
+
+## Integration with Other Systems
+
+This dashboard complements:
+- **webhook_app.py** - Captures recon_id from incoming webhooks
+- **payment_monitor.py** - Can be extended to alert on routing-specific issues
+- **Payment Analytics Dashboard** - Main transaction dashboard
+
+## Next Steps
+
+1. **Monitor MLT_EUR_MC_VAKIFBANK** - Investigate why all transactions are declining
+2. **Implement recon_id for remaining merchants** - Paytic MC TRY [LIVE]
+3. **Set up alerts** - Create Grafana alerts for routes with <50% success rate
+4. **Historical analysis** - Extend time range to analyze routing performance trends
+
+## Support
+
+For questions or issues:
+- Check Grafana logs: `journalctl -u grafana-server`
+- Check dashboard file: `/var/lib/grafana/dashboards/routing_configuration.json`
+- Verify datasource: Check `/etc/grafana/provisioning/datasources/postgresql.yaml`
+
+---
+
+**Dashboard Created:** November 5, 2025
+**Last Updated:** November 5, 2025
+**Version:** 1.0

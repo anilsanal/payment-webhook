@@ -1,0 +1,55 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:  # Allows manual deployment from GitHub UI
+
+jobs:
+  deploy:
+    name: Deploy to Server
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H $SSH_HOST >> ~/.ssh/known_hosts
+
+      - name: Deploy to server
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no $SSH_USER@$SSH_HOST 'bash -s' < deploy.sh
+
+      - name: Verify deployment
+        env:
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+        run: |
+          echo "Waiting 10 seconds for service to restart..."
+          sleep 10
+
+          # Check health endpoint
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" $WEBHOOK_URL/health || echo "000")
+
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Deployment successful! Health check passed."
+          else
+            echo "❌ Deployment may have issues. Health check returned: $HTTP_CODE"
+            exit 1
+          fi
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "🚨 Deployment failed! Check the logs above."

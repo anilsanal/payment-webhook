@@ -1,0 +1,367 @@
+#!/usr/bin/env python3
+"""
+Generate Grafana Dashboard for Payment Routing Configuration
+Shows recon_id routing setups and associated MIDs for each merchant
+"""
+import json
+import os
+
+OUTPUT_DIR = "/var/lib/grafana/dashboards"
+
+# Routing Configuration Dashboard
+routing_dashboard = {
+    "id": None,
+    "uid": "routing-configuration",
+    "title": "Payment Routing Configuration",
+    "tags": ["routing", "payment", "configuration"],
+    "timezone": "utc",
+    "schemaVersion": 38,
+    "refresh": "5m",
+    "time": {"from": "now-24h", "to": "now"},
+    "panels": [
+        # Title/Description Panel
+        {
+            "id": 1,
+            "gridPos": {"h": 3, "w": 24, "x": 0, "y": 0},
+            "type": "text",
+            "title": "Routing Configuration Overview",
+            "options": {
+                "mode": "markdown",
+                "content": """## Payment Routing Configuration Dashboard
+
+This dashboard displays the routing configuration for each merchant, showing:
+- **Recon ID**: Represents a VISA/MC + Bank combination routing setup
+- **MID**: Terminal IDs assigned under each routing setup
+- **Format**: `MERCHANT_CURRENCY_CARDTYPE_BANK` (e.g., MLT_EUR_MC_ALL)
+
+Data is updated every 5 minutes based on actual transactions captured in the system.
+"""
+            }
+        },
+
+        # Multipay [LIVE] Panel
+        {
+            "id": 2,
+            "gridPos": {"h": 12, "w": 12, "x": 0, "y": 3},
+            "type": "table",
+            "title": "Multipay [LIVE] - Routing Configuration",
+            "datasource": {"type": "postgres", "uid": "PaymentTransactions"},
+            "targets": [{
+                "refId": "A",
+                "format": "table",
+                "rawSql": """
+SELECT
+    recon_id AS "Recon ID",
+    COALESCE(mid_id, 'Not Set') AS "MID",
+    COUNT(*) AS "Transaction Count",
+    SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS "Success",
+    SUM(CASE WHEN status = 'declined' THEN 1 ELSE 0 END) AS "Declined",
+    ROUND(100.0 * SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) / COUNT(*), 2) AS "Success Rate %",
+    MAX(trans_datetime) AS "Last Transaction"
+FROM transactions
+WHERE merchant_name = 'Multipay [LIVE]'
+    AND recon_id IS NOT NULL
+    AND trans_datetime >= NOW() - INTERVAL '24 hours'
+GROUP BY recon_id, mid_id
+ORDER BY recon_id, mid_id;
+                """,
+                "datasource": {"type": "postgres", "uid": "PaymentTransactions"}
+            }],
+            "fieldConfig": {
+                "defaults": {
+                    "custom": {
+                        "align": "left",
+                        "displayMode": "auto"
+                    }
+                },
+                "overrides": [
+                    {
+                        "matcher": {"id": "byName", "options": "Success Rate %"},
+                        "properties": [{
+                            "id": "custom.displayMode",
+                            "value": "color-background"
+                        }, {
+                            "id": "thresholds",
+                            "value": {
+                                "mode": "absolute",
+                                "steps": [
+                                    {"value": 0, "color": "red"},
+                                    {"value": 50, "color": "orange"},
+                                    {"value": 70, "color": "yellow"},
+                                    {"value": 85, "color": "green"}
+                                ]
+                            }
+                        }]
+                    }
+                ]
+            },
+            "options": {
+                "showHeader": True,
+                "sortBy": []
+            }
+        },
+
+        # Multipay MC TRY [LIVE] Panel
+        {
+            "id": 3,
+            "gridPos": {"h": 12, "w": 12, "x": 12, "y": 3},
+            "type": "table",
+            "title": "Multipay MC TRY [LIVE] - Routing Configuration",
+            "datasource": {"type": "postgres", "uid": "PaymentTransactions"},
+            "targets": [{
+                "refId": "A",
+                "format": "table",
+                "rawSql": """
+SELECT
+    recon_id AS "Recon ID",
+    COALESCE(mid_id, 'Not Set') AS "MID",
+    COUNT(*) AS "Transaction Count",
+    SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS "Success",
+    SUM(CASE WHEN status = 'declined' THEN 1 ELSE 0 END) AS "Declined",
+    ROUND(100.0 * SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) / COUNT(*), 2) AS "Success Rate %",
+    MAX(trans_datetime) AS "Last Transaction"
+FROM transactions
+WHERE merchant_name = 'Multipay MC TRY [LIVE]'
+    AND recon_id IS NOT NULL
+    AND trans_datetime >= NOW() - INTERVAL '24 hours'
+GROUP BY recon_id, mid_id
+ORDER BY recon_id, mid_id;
+                """,
+                "datasource": {"type": "postgres", "uid": "PaymentTransactions"}
+            }],
+            "fieldConfig": {
+                "defaults": {
+                    "custom": {
+                        "align": "left",
+                        "displayMode": "auto"
+                    }
+                },
+                "overrides": [
+                    {
+                        "matcher": {"id": "byName", "options": "Success Rate %"},
+                        "properties": [{
+                            "id": "custom.displayMode",
+                            "value": "color-background"
+                        }, {
+                            "id": "thresholds",
+                            "value": {
+                                "mode": "absolute",
+                                "steps": [
+                                    {"value": 0, "color": "red"},
+                                    {"value": 50, "color": "orange"},
+                                    {"value": 70, "color": "yellow"},
+                                    {"value": 85, "color": "green"}
+                                ]
+                            }
+                        }]
+                    }
+                ]
+            },
+            "options": {
+                "showHeader": True,
+                "sortBy": []
+            }
+        },
+
+        # Paytic [LIVE] Panel
+        {
+            "id": 4,
+            "gridPos": {"h": 12, "w": 12, "x": 0, "y": 15},
+            "type": "table",
+            "title": "Paytic [LIVE] - Routing Configuration",
+            "datasource": {"type": "postgres", "uid": "PaymentTransactions"},
+            "targets": [{
+                "refId": "A",
+                "format": "table",
+                "rawSql": """
+SELECT
+    recon_id AS "Recon ID",
+    COALESCE(mid_id, 'Not Set') AS "MID",
+    COUNT(*) AS "Transaction Count",
+    SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS "Success",
+    SUM(CASE WHEN status = 'declined' THEN 1 ELSE 0 END) AS "Declined",
+    ROUND(100.0 * SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) / COUNT(*), 2) AS "Success Rate %",
+    MAX(trans_datetime) AS "Last Transaction"
+FROM transactions
+WHERE merchant_name = 'Paytic [LIVE]'
+    AND recon_id IS NOT NULL
+    AND trans_datetime >= NOW() - INTERVAL '24 hours'
+GROUP BY recon_id, mid_id
+ORDER BY recon_id, mid_id;
+                """,
+                "datasource": {"type": "postgres", "uid": "PaymentTransactions"}
+            }],
+            "fieldConfig": {
+                "defaults": {
+                    "custom": {
+                        "align": "left",
+                        "displayMode": "auto"
+                    }
+                },
+                "overrides": [
+                    {
+                        "matcher": {"id": "byName", "options": "Success Rate %"},
+                        "properties": [{
+                            "id": "custom.displayMode",
+                            "value": "color-background"
+                        }, {
+                            "id": "thresholds",
+                            "value": {
+                                "mode": "absolute",
+                                "steps": [
+                                    {"value": 0, "color": "red"},
+                                    {"value": 50, "color": "orange"},
+                                    {"value": 70, "color": "yellow"},
+                                    {"value": 85, "color": "green"}
+                                ]
+                            }
+                        }]
+                    }
+                ]
+            },
+            "options": {
+                "showHeader": True,
+                "sortBy": []
+            }
+        },
+
+        # Paytic MC TRY [LIVE] Panel
+        {
+            "id": 5,
+            "gridPos": {"h": 12, "w": 12, "x": 12, "y": 15},
+            "type": "table",
+            "title": "Paytic MC TRY [LIVE] - Routing Configuration",
+            "datasource": {"type": "postgres", "uid": "PaymentTransactions"},
+            "targets": [{
+                "refId": "A",
+                "format": "table",
+                "rawSql": """
+SELECT
+    recon_id AS "Recon ID",
+    COALESCE(mid_id, 'Not Set') AS "MID",
+    COUNT(*) AS "Transaction Count",
+    SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS "Success",
+    SUM(CASE WHEN status = 'declined' THEN 1 ELSE 0 END) AS "Declined",
+    ROUND(100.0 * SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) / COUNT(*), 2) AS "Success Rate %",
+    MAX(trans_datetime) AS "Last Transaction"
+FROM transactions
+WHERE merchant_name = 'Paytic MC TRY [LIVE]'
+    AND recon_id IS NOT NULL
+    AND trans_datetime >= NOW() - INTERVAL '24 hours'
+GROUP BY recon_id, mid_id
+ORDER BY recon_id, mid_id;
+                """,
+                "datasource": {"type": "postgres", "uid": "PaymentTransactions"}
+            }],
+            "fieldConfig": {
+                "defaults": {
+                    "custom": {
+                        "align": "left",
+                        "displayMode": "auto"
+                    }
+                },
+                "overrides": [
+                    {
+                        "matcher": {"id": "byName", "options": "Success Rate %"},
+                        "properties": [{
+                            "id": "custom.displayMode",
+                            "value": "color-background"
+                        }, {
+                            "id": "thresholds",
+                            "value": {
+                                "mode": "absolute",
+                                "steps": [
+                                    {"value": 0, "color": "red"},
+                                    {"value": 50, "color": "orange"},
+                                    {"value": 70, "color": "yellow"},
+                                    {"value": 85, "color": "green"}
+                                ]
+                            }
+                        }]
+                    }
+                ]
+            },
+            "options": {
+                "showHeader": True,
+                "sortBy": []
+            }
+        },
+
+        # Summary Statistics Panel
+        {
+            "id": 6,
+            "gridPos": {"h": 8, "w": 24, "x": 0, "y": 27},
+            "type": "table",
+            "title": "Overall Routing Statistics (Last 24 Hours)",
+            "datasource": {"type": "postgres", "uid": "PaymentTransactions"},
+            "targets": [{
+                "refId": "A",
+                "format": "table",
+                "rawSql": """
+SELECT
+    merchant_name AS "Merchant",
+    COUNT(DISTINCT recon_id) AS "Unique Recon IDs",
+    COUNT(DISTINCT mid_id) AS "Unique MIDs",
+    COUNT(*) AS "Total Transactions",
+    SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS "Success",
+    SUM(CASE WHEN status = 'declined' THEN 1 ELSE 0 END) AS "Declined",
+    ROUND(100.0 * SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) / COUNT(*), 2) AS "Success Rate %"
+FROM transactions
+WHERE merchant_name IN ('Multipay [LIVE]', 'Multipay MC TRY [LIVE]', 'Paytic [LIVE]', 'Paytic MC TRY [LIVE]')
+    AND recon_id IS NOT NULL
+    AND trans_datetime >= NOW() - INTERVAL '24 hours'
+GROUP BY merchant_name
+ORDER BY merchant_name;
+                """,
+                "datasource": {"type": "postgres", "uid": "PaymentTransactions"}
+            }],
+            "fieldConfig": {
+                "defaults": {
+                    "custom": {
+                        "align": "left",
+                        "displayMode": "auto"
+                    }
+                },
+                "overrides": [
+                    {
+                        "matcher": {"id": "byName", "options": "Success Rate %"},
+                        "properties": [{
+                            "id": "custom.displayMode",
+                            "value": "color-background"
+                        }, {
+                            "id": "thresholds",
+                            "value": {
+                                "mode": "absolute",
+                                "steps": [
+                                    {"value": 0, "color": "red"},
+                                    {"value": 50, "color": "orange"},
+                                    {"value": 70, "color": "yellow"},
+                                    {"value": 85, "color": "green"}
+                                ]
+                            }
+                        }]
+                    }
+                ]
+            },
+            "options": {
+                "showHeader": True,
+                "sortBy": []
+            }
+        }
+    ]
+}
+
+# Write dashboard to file
+filepath = os.path.join(OUTPUT_DIR, "routing_configuration.json")
+with open(filepath, 'w') as f:
+    json.dump(routing_dashboard, f, indent=2)
+
+print(f"✅ Created: {filepath}")
+print("\nDashboard Details:")
+print("- Title: Payment Routing Configuration")
+print("- UID: routing-configuration")
+print("- Panels: 6 (4 merchant panels + 1 summary + 1 description)")
+print("- Auto-refresh: Every 5 minutes")
+print("- Time range: Last 24 hours")
+print("\nThe dashboard will be available in Grafana at:")
+print("https://analytics.polpay.pro/d/routing-configuration")
