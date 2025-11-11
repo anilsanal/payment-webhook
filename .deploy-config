@@ -1,0 +1,15 @@
+# Deployment Configuration
+# Copy this file and update with your server details
+
+# Server connection details
+SERVER_HOST=your-server-ip-or-hostname
+SERVER_USER=root
+SERVER_PORT=22
+
+# Optional: If using non-standard SSH key
+# SSH_KEY_PATH=~/.ssh/id_rsa
+
+# Example configurations:
+# SERVER_HOST=192.168.1.100
+# SERVER_HOST=payment.example.com
+# SERVER_USER=ubuntu

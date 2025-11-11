@@ -57,3 +57,6 @@ Thumbs.db
 
 # Archive
 grafana-archive/
+
+# Deployment config
+.deploy-config.local
