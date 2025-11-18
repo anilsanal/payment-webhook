@@ -53,6 +53,10 @@ FROM transactions
 WHERE last_updated_at >= NOW() - INTERVAL '5 minutes'
     AND mid_id IS NOT NULL
     AND bank_name IS NOT NULL
+    -- Exclude test/dummy MIDs
+    AND mid_id NOT IN ('43110201461')
+    AND (mid_name NOT ILIKE '%timesaver%' OR mid_name IS NULL)
+    AND (mid_name NOT ILIKE '%test%' OR mid_name IS NULL)
 GROUP BY mid_id, mid_name, bank_name
 HAVING COUNT(*) >= 1
 ORDER BY decline_rate DESC NULLS LAST;
@@ -81,6 +85,10 @@ FROM transactions
 WHERE last_updated_at >= NOW() - INTERVAL '15 minutes'
     AND mid_id IS NOT NULL
     AND bank_name IS NOT NULL
+    -- Exclude test/dummy MIDs
+    AND mid_id NOT IN ('43110201461')
+    AND (mid_name NOT ILIKE '%timesaver%' OR mid_name IS NULL)
+    AND (mid_name NOT ILIKE '%test%' OR mid_name IS NULL)
 GROUP BY mid_id, mid_name, bank_name
 HAVING COUNT(*) >= 1
 ORDER BY decline_rate DESC NULLS LAST;
@@ -109,6 +117,10 @@ FROM transactions
 WHERE last_updated_at >= NOW() - INTERVAL '30 minutes'
     AND mid_id IS NOT NULL
     AND bank_name IS NOT NULL
+    -- Exclude test/dummy MIDs
+    AND mid_id NOT IN ('43110201461')
+    AND (mid_name NOT ILIKE '%timesaver%' OR mid_name IS NULL)
+    AND (mid_name NOT ILIKE '%test%' OR mid_name IS NULL)
 GROUP BY mid_id, mid_name, bank_name
 HAVING COUNT(*) >= 1
 ORDER BY decline_rate DESC NULLS LAST;
@@ -134,6 +146,10 @@ FROM transactions
 WHERE last_updated_at >= NOW() - INTERVAL '2 hours'
     AND mid_id IS NOT NULL
     AND bank_name IS NOT NULL
+    -- Exclude test/dummy MIDs
+    AND mid_id NOT IN ('43110201461')
+    AND (mid_name NOT ILIKE '%timesaver%' OR mid_name IS NULL)
+    AND (mid_name NOT ILIKE '%test%' OR mid_name IS NULL)
 GROUP BY mid_id, mid_name, bank_name
 HAVING COUNT(*) >= 10;
 

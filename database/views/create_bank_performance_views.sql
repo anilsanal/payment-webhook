@@ -20,6 +20,10 @@ SELECT
 FROM transactions
 WHERE last_updated_at >= NOW() - INTERVAL '5 minutes'
     AND bank_name IS NOT NULL
+    -- Exclude test/dummy MIDs
+    AND mid_id NOT IN ('43110201461')
+    AND (mid_name NOT ILIKE '%timesaver%' OR mid_name IS NULL)
+    AND (mid_name NOT ILIKE '%test%' OR mid_name IS NULL)
 GROUP BY bank_name
 HAVING COUNT(*) >= 1
 ORDER BY total_transactions DESC;

@@ -66,6 +66,32 @@ EXCLUDED_DECLINE_DESCRIPTIONS = [
     "risk management system",
 ]
 
+# MIDs to EXCLUDE from alerts and monitoring (test/dummy MIDs)
+EXCLUDED_MIDS = [
+    '43110201461',  # Test MID - should not trigger alerts
+]
+
+# MID Names to EXCLUDE from alerts (case-insensitive partial match)
+EXCLUDED_MID_NAMES = [
+    'timesaver',    # Test MID name
+    'test',         # Generic test MIDs
+]
+
+def should_exclude_mid(mid_id, mid_name):
+    """Check if a MID should be excluded from alerts"""
+    # Check by MID ID
+    if mid_id and mid_id in EXCLUDED_MIDS:
+        return True
+
+    # Check by MID name (case-insensitive partial match)
+    if mid_name:
+        mid_name_lower = mid_name.lower().strip()
+        for excluded_name in EXCLUDED_MID_NAMES:
+            if excluded_name in mid_name_lower:
+                return True
+
+    return False
+
 def should_exclude_decline(reply_desc):
     """Check if a decline reason should be excluded from alerts"""
     if not reply_desc:
@@ -328,6 +354,11 @@ def check_performance_window(cursor, time_window):
         pending = row['pending']
         decline_descriptions = row['decline_descriptions'] or []
 
+        # Skip excluded MIDs (test/dummy MIDs)
+        if should_exclude_mid(mid_id, mid_name):
+            print(f"⏭️  Skipping excluded MID: {mid_name} ({mid_id})")
+            continue
+
         # Count how many declines should be excluded (insufficient funds)
         excluded_declines = sum(1 for desc in decline_descriptions if should_exclude_decline(desc))
 
@@ -481,6 +512,11 @@ def check_low_volume_failures(cursor, time_window):
         txns_in_5min = row['transactions_in_5min']
         last_10_count = row['last_10_count']
         declined_count = row['declined_count']
+
+        # Skip excluded MIDs (test/dummy MIDs)
+        if should_exclude_mid(mid_id, mid_name):
+            print(f"⏭️  Skipping excluded MID in low-volume check: {mid_name} ({mid_id})")
+            continue
 
         # Escape HTML special characters
         mid_name_escaped = escape_html(mid_name)
