@@ -190,6 +190,91 @@ def get_trend_data(cursor, days=7):
     cursor.execute(query, (days,))
     return cursor.fetchall()
 
+def get_suppression_summary(cursor, start_date, end_date):
+    """Get summary of suppressed alerts"""
+    query = """
+        SELECT
+            COUNT(*) as total_suppressions,
+            COUNT(DISTINCT mid_name || ' + ' || bank_name) as unique_routes_suppressed,
+            suppression_reason,
+            COUNT(*) as count_by_reason
+        FROM alert_suppression_log
+        WHERE suppression_time >= %s AND suppression_time < %s
+        GROUP BY suppression_reason
+    """
+    cursor.execute(query, (start_date, end_date))
+    return cursor.fetchall()
+
+def get_top_suppressed_routes(cursor, start_date, end_date, limit=10):
+    """Get top suppressed MID+Bank routes with alternative route suggestions"""
+    query = """
+        SELECT
+            mid_name,
+            bank_name,
+            COUNT(*) as suppression_count,
+            AVG(success_rate_7d) as avg_success_rate_7d,
+            AVG(success_rate_30d) as avg_success_rate_30d,
+            MAX(suppression_time) as last_suppressed,
+            (SELECT metadata->'alternative_routes' FROM alert_suppression_log asl2
+             WHERE asl2.mid_name = alert_suppression_log.mid_name
+               AND asl2.bank_name = alert_suppression_log.bank_name
+               AND asl2.metadata IS NOT NULL
+             ORDER BY suppression_time DESC LIMIT 1) as alternatives
+        FROM alert_suppression_log
+        WHERE suppression_time >= %s AND suppression_time < %s
+        GROUP BY mid_name, bank_name
+        ORDER BY suppression_count DESC
+        LIMIT %s
+    """
+    cursor.execute(query, (start_date, end_date, limit))
+    return cursor.fetchall()
+
+def get_recovered_routes(cursor, lookback_days=7):
+    """
+    Find suppressed routes that have recovered (now have >10% success rate).
+    These should resume normal alerting.
+    """
+    query = """
+        WITH recently_suppressed AS (
+            SELECT DISTINCT
+                s.mid_id,
+                s.mid_name,
+                s.bank_name,
+                MAX(s.suppression_time) as last_suppressed,
+                AVG(s.success_rate_7d) as avg_suppressed_success_rate
+            FROM alert_suppression_log s
+            WHERE s.suppression_time >= NOW() - INTERVAL '%s days'
+            GROUP BY s.mid_id, s.mid_name, s.bank_name
+            HAVING AVG(s.success_rate_7d) < 10  -- Was being suppressed (low success)
+        ),
+        current_performance AS (
+            SELECT
+                t.mid_id,
+                COUNT(*) FILTER (WHERE t.status = 'success' AND t.last_updated_at >= NOW() - INTERVAL '7 days') as success_7d,
+                COUNT(*) FILTER (WHERE t.last_updated_at >= NOW() - INTERVAL '7 days') as total_7d,
+                ROUND(100.0 * COUNT(*) FILTER (WHERE t.status = 'success' AND t.last_updated_at >= NOW() - INTERVAL '7 days') /
+                      NULLIF(COUNT(*) FILTER (WHERE t.last_updated_at >= NOW() - INTERVAL '7 days'), 0), 2) as current_success_rate_7d
+            FROM transactions t
+            WHERE t.last_updated_at >= NOW() - INTERVAL '7 days'
+            GROUP BY t.mid_id
+        )
+        SELECT
+            rs.mid_name,
+            rs.bank_name,
+            rs.avg_suppressed_success_rate as old_success_rate,
+            cp.current_success_rate_7d as new_success_rate,
+            cp.total_7d as recent_transactions,
+            rs.last_suppressed
+        FROM recently_suppressed rs
+        JOIN current_performance cp ON rs.mid_id = cp.mid_id
+        WHERE cp.current_success_rate_7d >= 10  -- Now performing well!
+          AND cp.total_7d >= 10  -- Has meaningful volume
+        ORDER BY cp.current_success_rate_7d DESC
+        LIMIT 10
+    """
+    cursor.execute(query, (lookback_days,))
+    return cursor.fetchall()
+
 def format_number(num):
     """Format number with commas"""
     if num is None:
@@ -217,6 +302,9 @@ def generate_daily_report():
         top_banks = get_top_banks(cursor, start_date, end_date)
         top_mids = get_top_mids(cursor, start_date, end_date)
         trend_data = get_trend_data(cursor, days=7)
+        suppression_summary = get_suppression_summary(cursor, start_date, end_date)
+        top_suppressed = get_top_suppressed_routes(cursor, start_date, end_date, limit=5)
+        recovered_routes = get_recovered_routes(cursor, lookback_days=7)
 
         # Unpack summary
         total_alerts, critical_count, warning_count, unique_routes, unique_mids, unique_banks = summary
@@ -335,6 +423,80 @@ def generate_daily_report():
             if multi_bank_warning:
                 report += f"   • {multi_bank_warning}\n"
             report += "\n"
+
+        # Suppression Summary
+        total_suppressions = sum(row[3] for row in suppression_summary) if suppression_summary else 0
+
+        if total_suppressions > 0:
+            total_potential_alerts = total_alerts + total_suppressions
+            suppression_rate = (total_suppressions / total_potential_alerts * 100) if total_potential_alerts > 0 else 0
+
+            report += f"""━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔇 <b>SUPPRESSED ALERTS (Smart Filtering)</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+• <b>Total Suppressed:</b> {total_suppressions} alerts
+• <b>Noise Reduction:</b> {suppression_rate:.1f}% ({total_suppressions}/{total_potential_alerts} potential alerts)
+• <b>Alerts Sent:</b> {total_alerts} (actionable only)
+
+<b>Suppression Breakdown:</b>
+"""
+
+            for supp_row in suppression_summary:
+                reason = supp_row[2] if supp_row[2] else 'unknown'
+                count = supp_row[3]
+                reason_display = {
+                    'dead_route': 'Dead Routes (never work)',
+                    'low_success_rate': 'Low Success Rate (<10%)',
+                    'unknown': 'Other'
+                }.get(reason, reason)
+                report += f"   • {reason_display}: {count}\n"
+
+            if top_suppressed:
+                report += f"\n<b>Top 5 Suppressed Routes:</b>\n"
+                for i, supp in enumerate(top_suppressed, 1):
+                    mid_name = supp[0][:40] + "..." if len(supp[0]) > 40 else supp[0]
+                    bank_name = supp[1][:35] + "..." if len(supp[1]) > 35 else supp[1]
+                    count = supp[2]
+                    success_rate_30d = supp[4] or 0
+                    alternatives = supp[6]  # JSONB array of alternatives
+
+                    report += f"   {i}. {mid_name} + {bank_name}\n"
+                    report += f"      Suppressed {count}x (Success: {success_rate_30d:.1f}%)\n"
+
+                    # Show alternative routes if available
+                    if alternatives and len(alternatives) > 0:
+                        report += f"      💡 <b>Alternatives:</b>\n"
+                        for alt in alternatives[:2]:  # Show top 2
+                            alt_name = alt['mid_name'][:35] + "..." if len(alt['mid_name']) > 35 else alt['mid_name']
+                            alt_success = alt['success_rate_24h']
+                            report += f"         → {alt_name}: {alt_success:.1f}% success\n"
+                    else:
+                        report += f"      ⚠️ <i>No alternative routes available</i>\n"
+
+            report += "\n💡 <b>Note:</b> Smart filtering automatically suppresses alerts for routes with <10% success rate\n\n"
+
+        # Recovered Routes Section
+        if recovered_routes:
+            report += f"""━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ <b>RECOVERED ROUTES (Resumed Alerting)</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>Routes that were suppressed but have recovered:</b>
+
+"""
+            for i, route in enumerate(recovered_routes, 1):
+                mid_name = route[0][:40] + "..." if len(route[0]) > 40 else route[0]
+                bank_name = route[1][:35] + "..." if len(route[1]) > 35 else route[1]
+                old_rate = route[2] or 0
+                new_rate = route[3] or 0
+                improvement = new_rate - old_rate
+
+                report += f"   {i}. {mid_name} + {bank_name}\n"
+                report += f"      📊 Success rate: {old_rate:.1f}% → {new_rate:.1f}% (+{improvement:.1f}%)\n"
+                report += f"      ✅ <b>Now passing threshold - alerts resumed</b>\n\n"
+
+            report += "💡 <b>Note:</b> These routes will now receive normal alerts since they've recovered\n\n"
 
         # Trend analysis with bar chart
         report += """━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

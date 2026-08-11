@@ -8,6 +8,7 @@ Updated to use trans_order as unique identifier and include merchant names
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 import psycopg2
+from psycopg2 import pool as psycopg2_pool
 from psycopg2.extras import RealDictCursor
 from datetime import datetime
 import logging
@@ -16,6 +17,8 @@ import os
 from contextlib import contextmanager
 import requests
 import json
+import threading
+import time
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -39,11 +42,15 @@ logger = logging.getLogger(__name__)
 # Initialize FastAPI
 app = FastAPI(title="Payment Webhook Receiver", version="2.1.0")
 
+@app.on_event("startup")
+async def startup_event():
+    _init_cache()
+
 # Database configuration
 DB_CONFIG = {
     'dbname': os.getenv('DB_NAME', 'payment_transactions'),
     'user': os.getenv('DB_USER', 'webhook_user'),
-    'password': os.getenv('DB_PASSWORD', 'yingyanganil5s'),
+    'password': os.getenv('DB_PASSWORD'),
     'host': os.getenv('DB_HOST', 'localhost'),
     'port': os.getenv('DB_PORT', '5432')
 }
@@ -51,22 +58,89 @@ DB_CONFIG = {
 # Slack configuration
 SLACK_WEBHOOK_URL = os.getenv('SLACK_WEBHOOK_URL', '')
 
+# Connection pool: 2 idle connections kept warm, up to 10 under load (4 workers × ~2 concurrent)
+_db_pool = psycopg2_pool.ThreadedConnectionPool(minconn=2, maxconn=10, **DB_CONFIG)
+
 @contextmanager
 def get_db_connection():
-    """Context manager for database connections"""
-    conn = None
+    """Borrow a connection from the pool, return it on exit."""
+    conn = _db_pool.getconn()
     try:
-        conn = psycopg2.connect(**DB_CONFIG)
         yield conn
         conn.commit()
     except Exception as e:
-        if conn:
-            conn.rollback()
+        conn.rollback()
         logger.error(f"Database error: {e}")
         raise
     finally:
-        if conn:
-            conn.close()
+        _db_pool.putconn(conn)
+
+# ---------------------------------------------------------------------------
+# In-memory mapping cache
+# bin_bank_mapping, merchant_mapping, mid_mapping are static config tables
+# (~768 KB total). Cache them and refresh every 5 minutes so DB lookups
+# become O(1) dict access instead of a round-trip per webhook.
+# ---------------------------------------------------------------------------
+_mapping_cache: dict = {'bins': {}, 'merchants': {}, 'mids': {}}
+_cache_lock = threading.RLock()
+_CACHE_TTL = 300  # seconds
+
+def _load_mappings() -> dict:
+    """Load all 3 mapping tables from DB into dicts."""
+    conn = _db_pool.getconn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT bin, bank_name FROM bin_bank_mapping")
+            bins = {row[0]: row[1] for row in cur.fetchall()}
+            cur.execute("SELECT merchant_id, merchant_name FROM merchant_mapping")
+            merchants = {row[0]: row[1] for row in cur.fetchall()}
+            cur.execute("SELECT mid_id, terminal_name FROM mid_mapping")
+            mids = {row[0]: row[1] for row in cur.fetchall()}
+        return {'bins': bins, 'merchants': merchants, 'mids': mids}
+    finally:
+        _db_pool.putconn(conn)
+
+def _refresh_cache_loop():
+    """Background thread: reload mappings every TTL seconds."""
+    while True:
+        time.sleep(_CACHE_TTL)
+        try:
+            fresh = _load_mappings()
+            with _cache_lock:
+                _mapping_cache.update(fresh)
+            logger.info(f"Mapping cache refreshed — bins:{len(_mapping_cache['bins'])} merchants:{len(_mapping_cache['merchants'])} mids:{len(_mapping_cache['mids'])}")
+        except Exception as e:
+            logger.warning(f"Mapping cache refresh failed (using stale data): {e}")
+
+def _init_cache():
+    """Load cache on startup, then start background refresh thread."""
+    try:
+        fresh = _load_mappings()
+        with _cache_lock:
+            _mapping_cache.update(fresh)
+        logger.info(f"Mapping cache loaded — bins:{len(_mapping_cache['bins'])} merchants:{len(_mapping_cache['merchants'])} mids:{len(_mapping_cache['mids'])}")
+    except Exception as e:
+        logger.error(f"Failed to load mapping cache on startup: {e}")
+    t = threading.Thread(target=_refresh_cache_loop, daemon=True)
+    t.start()
+
+def lookup_bank_name(ccbin: str | None) -> str | None:
+    if not ccbin:
+        return None
+    with _cache_lock:
+        return _mapping_cache['bins'].get(ccbin)
+
+def lookup_merchant_name(merchant_id: str | None) -> str | None:
+    if not merchant_id:
+        return None
+    with _cache_lock:
+        return _mapping_cache['merchants'].get(merchant_id)
+
+def lookup_mid_name(mid_id: str | None) -> str | None:
+    if not mid_id:
+        return None
+    with _cache_lock:
+        return _mapping_cache['mids'].get(mid_id)
 
 def send_slack_notification(status_code, error_message, webhook_data, request_info):
     """Send error notification to Slack channel"""
@@ -193,10 +267,10 @@ def log_data_issue(trans_order, trans_id, issue_type, field_name, field_value, e
     except Exception as e:
         logger.error(f"Failed to log data issue: {e}")
 
-def validate_webhook_data(data, cursor):
-    """Validate webhook data and log issues"""
+def validate_webhook_data(data, bank_name, merchant_name, cursor):
+    """Validate webhook data and log issues. Uses pre-resolved names from cache."""
     issues = []
-    
+
     # Required fields
     required_fields = ['trans_order', 'reply_code', 'merchant_id', 'trans_date']
     for field in required_fields:
@@ -207,12 +281,11 @@ def validate_webhook_data(data, cursor):
                 'field_value': data.get(field),
                 'error_message': f'Required field {field} is missing or empty'
             })
-    
-    # Check if BIN exists in mapping
+
+    # Check BIN via cache (no DB query needed)
     cc_bin = data.get('ccBIN')
     if cc_bin:
-        cursor.execute("SELECT bin FROM bin_bank_mapping WHERE bin = %s", (cc_bin,))
-        if not cursor.fetchone():
+        if bank_name is None:
             issues.append({
                 'issue_type': 'missing_bin_mapping',
                 'field_name': 'ccBIN',
@@ -226,22 +299,19 @@ def validate_webhook_data(data, cursor):
             'field_value': None,
             'error_message': 'BIN field is missing from webhook'
         })
-    
-    # Check if merchant exists in mapping
+
+    # Check merchant via cache (no DB query needed)
     merchant_id = data.get('merchant_id')
-    if merchant_id:
-        cursor.execute("SELECT merchant_id FROM merchant_mapping WHERE merchant_id = %s", (merchant_id,))
-        if not cursor.fetchone():
-            issues.append({
-                'issue_type': 'missing_merchant_mapping',
-                'field_name': 'merchant_id',
-                'field_value': merchant_id,
-                'error_message': f'Merchant ID {merchant_id} not found in merchant_mapping table'
-            })
-    
+    if merchant_id and merchant_name is None:
+        issues.append({
+            'issue_type': 'missing_merchant_mapping',
+            'field_name': 'merchant_id',
+            'field_value': merchant_id,
+            'error_message': f'Merchant ID {merchant_id} not found in merchant_mapping table'
+        })
+
     # Important optional fields
-    important_fields = ['client_email', 'client_fullname', 'trans_amount']
-    for field in important_fields:
+    for field in ['client_email', 'client_fullname', 'trans_amount']:
         if not data.get(field):
             issues.append({
                 'issue_type': 'missing_optional',
@@ -249,8 +319,7 @@ def validate_webhook_data(data, cursor):
                 'field_value': data.get(field),
                 'error_message': f'Optional but important field {field} is missing'
             })
-    
-    # Log all issues
+
     for issue in issues:
         log_data_issue(
             data.get('trans_order'),
@@ -262,60 +331,11 @@ def validate_webhook_data(data, cursor):
             data,
             cursor
         )
-    
+
     return len(issues)
 
-def get_bank_name(ccbin, cursor):
-    """Get bank name from BIN mapping table"""
-    if not ccbin:
-        return None
-    
-    try:
-        cursor.execute(
-            "SELECT bank_name FROM bin_bank_mapping WHERE bin = %s",
-            (ccbin,)
-        )
-        result = cursor.fetchone()
-        return result['bank_name'] if result else None
-    except Exception as e:
-        logger.warning(f"Could not fetch bank name for BIN {ccbin}: {e}")
-        return None
-
-def get_merchant_name(merchant_id, cursor):
-    """Get merchant name from merchant mapping table"""
-    if not merchant_id:
-        return None
-
-    try:
-        cursor.execute(
-            "SELECT merchant_name FROM merchant_mapping WHERE merchant_id = %s",
-            (merchant_id,)
-        )
-        result = cursor.fetchone()
-        return result['merchant_name'] if result else None
-    except Exception as e:
-        logger.warning(f"Could not fetch merchant name for ID {merchant_id}: {e}")
-        return None
-
-def get_mid_name(mid_id, cursor):
-    """Get terminal name from mid mapping table"""
-    if not mid_id:
-        return None
-
-    try:
-        cursor.execute(
-            "SELECT terminal_name FROM mid_mapping WHERE mid_id = %s",
-            (mid_id,)
-        )
-        result = cursor.fetchone()
-        return result['terminal_name'] if result else None
-    except Exception as e:
-        logger.warning(f"Could not fetch terminal name for MidID {mid_id}: {e}")
-        return None
-
-def insert_webhook_event(data, status, cursor):
-    """Insert webhook event into webhook_events table (audit trail)"""
-
+def insert_webhook_event(data, status, bank_name, merchant_name, mid_name, cursor):
+    """Insert webhook event into webhook_events table (audit trail)."""
     insert_query = """
     INSERT INTO webhook_events (
         trans_id, trans_order, reply_code, reply_desc, status,
@@ -348,12 +368,6 @@ def insert_webhook_event(data, status, cursor):
     )
     RETURNING id;
     """
-
-    # Get bank name, merchant name, and mid name
-    bank_name = get_bank_name(data.get('ccBIN'), cursor)
-    merchant_name = get_merchant_name(data.get('merchant_id'), cursor)
-    mid_name = get_mid_name(data.get('MidID'), cursor)
-    
     params = {
         'trans_id': data.get('trans_id'),
         'trans_order': data.get('trans_order'),
@@ -403,17 +417,11 @@ def insert_webhook_event(data, status, cursor):
         'CP30': data.get('CP30'),
         'raw_data': str(data)
     }
-    
     cursor.execute(insert_query, params)
-    result = cursor.fetchone()
-    return result['id']
+    return cursor.fetchone()['id']
 
-def upsert_transaction(data, status, cursor):
-    """
-    Insert or update transaction in transactions table based on trans_order.
-    This keeps only the latest status for each transaction.
-    """
-    
+def upsert_transaction(data, status, bank_name, merchant_name, mid_name, cursor):
+    """Insert or update transaction keyed by trans_order (latest status only)."""
     upsert_query = """
     INSERT INTO transactions (
         trans_order, trans_id, reply_code, reply_desc, status,
@@ -457,12 +465,6 @@ def upsert_transaction(data, status, cursor):
         recon_id = EXCLUDED.recon_id,
         last_updated_at = NOW();
     """
-
-    # Get bank name, merchant name, and mid name
-    bank_name = get_bank_name(data.get('ccBIN'), cursor)
-    merchant_name = get_merchant_name(data.get('merchant_id'), cursor)
-    mid_name = get_mid_name(data.get('MidID'), cursor)
-    
     params = {
         'trans_order': data.get('trans_order'),
         'trans_id': data.get('trans_id'),
@@ -503,7 +505,6 @@ def upsert_transaction(data, status, cursor):
         'mid_name': mid_name,
         'recon_id': data.get('ReconID')
     }
-    
     cursor.execute(upsert_query, params)
 
 @app.api_route("/webhook", methods=["GET", "POST"])
@@ -547,20 +548,25 @@ async def receive_webhook(request: Request):
         # Determine status
         status = determine_status(data.get('reply_code'))
 
+        # Resolve names once from cache (O(1), no DB round-trip)
+        bank_name = lookup_bank_name(data.get('ccBIN'))
+        merchant_name = lookup_merchant_name(data.get('merchant_id'))
+        mid_name = lookup_mid_name(data.get('MidID'))
+
         # Store in database
         with get_db_connection() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 # Validate data and log issues (but don't fail the webhook)
-                issues_count = validate_webhook_data(data, cursor)
+                issues_count = validate_webhook_data(data, bank_name, merchant_name, cursor)
                 if issues_count > 0:
                     logger.warning(f"Webhook has {issues_count} data quality issues")
 
                 # Insert into webhook_events (audit trail - keeps all webhooks)
-                event_id = insert_webhook_event(data, status, cursor)
+                event_id = insert_webhook_event(data, status, bank_name, merchant_name, mid_name, cursor)
                 logger.info(f"Inserted webhook event with id: {event_id}")
 
                 # Upsert into transactions (latest status only - keyed by trans_order)
-                upsert_transaction(data, status, cursor)
+                upsert_transaction(data, status, bank_name, merchant_name, mid_name, cursor)
                 logger.info(f"Updated transaction table for trans_order: {data.get('trans_order')} with status: {status}")
 
         response_data = {
